@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ecount to CJ 택배 송장 변환 시스템</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Pretendard', sans-serif; background-color: #f8fafc; color: #1e293b; }
+        .drop-zone { border: 2px dashed #cbd5e1; transition: all 0.3s ease; }
+        .drop-zone.active { border-color: #3b82f6; background-color: #eff6ff; }
+        .white-space-pre { white-space: pre-wrap; }
+    </style>
+</head>
+<body class="min-h-screen py-10 px-4">
+    <div class="max-w-4xl mx-auto">
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-extrabold tracking-tight text-slate-900 mb-2">CJ Invoice Generator</h1>
+            <p class="text-slate-500 font-medium text-lg">이카운트 매출 자료를 CJ 송장 양식으로 스마트하게 변환합니다.</p>
+            <p class="text-slate-300 font-medium">Ver.1.2.8 (업로드 기능 복구 및 로직 통합)</p>
+        </header>
+
+        <form id="invoiceForm" class="space-y-6">
+            <div class="bg-white rounded-2xl shadow-sm p-8 border border-slate-200">
+                <div id="dropZone" class="drop-zone rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer">
+                    <div class="w-16 h-16 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center mb-4">
+                        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    </div>
+                    <p class="text-lg font-semibold text-slate-700 text-center">엑셀 파일을 이곳에 드래그하거나 클릭하세요</p>
+                    <p class="text-slate-300 font-medium">지원가능 파일: xlsx, xls</p>
+                    <input type="file" id="fileInput" class="hidden" accept=".xlsx, .xls">
+                    <div id="fileInfo" class="hidden mt-4 px-4 py-2 bg-blue-100 text-blue-700 rounded-full text-sm font-bold"></div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-sm p-8 border border-slate-200">
+                <h2 class="text-sm font-bold text-slate-400 uppercase mb-4 tracking-widest">기본 발송인 (데이터에 없을 시 사용)</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs font-bold text-slate-500">발송인 성함</label>
+                        <input type="text" id="senderName" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value="레오파드">
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-500">연락처</label>
+                        <input type="text" id="senderPhone" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value="051-362-1213">
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <label class="text-xs font-bold text-slate-500">출고지 주소</label>
+                    <input type="text" id="senderAddress" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl" value="부산시 강서구 낙동남로 533번길 27">
+                </div>
+            </div>
+
+            <button type="submit" class="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-lg hover:bg-slate-800 transition shadow-lg">
+                송장 데이터 분석 및 생성
+            </button>
+        </form>
+
+        <div id="result" class="mt-12 space-y-6 hidden">
+            <div class="flex items-center justify-between">
+                <h2 class="text-2xl font-bold text-slate-900">최종 송장 리스트</h2>
+                <button id="downloadExcel" class="px-6 py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 transition shadow-md">
+                    엑셀 다운로드
+                </button>
+            </div>
+            <div id="invoiceList" class="grid grid-cols-1 gap-4"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const invoiceForm = document.getElementById('invoiceForm');
+        const resultArea = document.getElementById('result');
+        const invoiceList = document.getElementById('invoiceList');
+        const downloadExcelButton = document.getElementById('downloadExcel');
+
+        let finalUploadData = [];
+
+        // --- 1. 파일 업로드 핸들러 복구 ---
+        dropZone.onclick = () => fileInput.click();
+
+        fileInput.onchange = (e) => {
+            if (e.target.files.length > 0) handleFileDisplay(e.target.files[0]);
+        };
+
+        dropZone.ondragover = (e) => {
+            e.preventDefault();
+            dropZone.classList.add('active');
+        };
+
+        dropZone.ondragleave = () => {
+            dropZone.classList.remove('active');
+        };
+
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('active');
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileDisplay(e.dataTransfer.files[0]);
+            }
+        };
+
+        function handleFileDisplay(file) {
+            fileInfo.innerText = `선택된 파일: ${file.name}`;
+            fileInfo.classList.remove('hidden');
+        }
+
+        // --- 2. 폼 제출 및 엑셀 분석 ---
+        invoiceForm.onsubmit = (e) => {
+            e.preventDefault();
+            const file = fileInput.files[0];
+            if (!file) return alert("파일을 업로드해주세요.");
+
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const data = new Uint8Array(ev.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { header: 1 });
+                
+                // 헤더 정보 탐색 (2행 기준)
+                if (rawRows.length < 2) return alert("엑셀 데이터가 부족합니다.");
+                const headers = rawRows[1].map(h => String(h || '').trim().replace(/\s/g, ''));
+                const idx = { 
+                    item: headers.indexOf('품목명'), 
+                    spec: headers.indexOf('규격'), 
+                    qty: headers.indexOf('수량'), 
+                    delivery: headers.indexOf('배송지') 
+                };
+
+                processRowsForUpload(rawRows.slice(2), idx);
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
+        function processRowsForUpload(rows, idx) {
+            const defaultSender = { 
+                name: document.getElementById('senderName').value, 
+                phone: document.getElementById('senderPhone').value, 
+                addr: document.getElementById('senderAddress').value 
+            };
+            const orderMap = new Map();
+
+            rows.forEach(row => {
+                const deliveryStr = String(row[idx.delivery] || '');
+                if (!deliveryStr.toLowerCase().includes('/cj/')) return;
+
+                const parts = deliveryStr.split('/').map(p => p.trim());
+                if (parts.length < 5 || parts[0].replace(/\s/g, '') === '직선') return;
+
+                // 운임 구분: 선/현 -> 선불, 착 -> 착불
+                let payType = '선불';
+                if (parts[0] === '착') payType = '착불';
+
+                let currentSenderName = defaultSender.name;
+                let currentSenderPhone = defaultSender.phone;
+                let currentSenderAddr = defaultSender.addr;
+                let recAddr = parts[4]; 
+                let lastSenderIdx = -1;
+
+                // 발신인/연락처 파싱
+                for (let i = 5; i < parts.length; i++) {
+                    const senderMatch = parts[i].match(/^(발신|발신인)[:\s]*(.*)/);
+                    if (senderMatch) {
+                        lastSenderIdx = i;
+                        if (senderMatch[2]) currentSenderName = senderMatch[2].trim();
+                        
+                        if (i + 1 < parts.length) {
+                            const phoneMatch = parts[i+1].match(/^(\d{2,4}-\d{3,4}-\d{4})$/);
+                            if (phoneMatch) {
+                                currentSenderPhone = phoneMatch[0];
+                                lastSenderIdx = i + 1;
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // 메모 생성
+                let memos = [];
+                let memoStart = lastSenderIdx !== -1 ? lastSenderIdx + 1 : 5;
+                for (let j = memoStart; j < parts.length; j++) if (parts[j]) memos.push(parts[j]);
+                const memoFinal = memos.length > 0 ? memos.join(' / ') : '-';
+
+                const key = `${parts[2]}_${parts[3]}_${recAddr}`;
+                if (!orderMap.has(key)) {
+                    orderMap.set(key, { 
+                        senderName: currentSenderName, senderPhone: currentSenderPhone, senderAddr: currentSenderAddr, 
+                        recName: parts[2], recPhone: parts[3], recAddr: recAddr, 
+                        payType, items: [], memo: memoFinal 
+                    });
+                }
+                orderMap.get(key).items.push({ 
+                    name: String(row[idx.item] || ''), 
+                    spec: String(row[idx.spec] || ''), 
+                    qty: parseInt(row[idx.qty]) || 0 
+                });
+            });
+
+            // 데이터 가공 및 박스 분할
+            finalUploadData = [];
+            orderMap.forEach(order => {
+                let items = [...order.items];
+                while (items.some(it => it.qty > 0)) {
+                    let boxQty = 0;
+                    let boxLimit = 10;
+                    let boxItems = [];
+                    let mainName = "";
+
+                    for (let it of items) {
+                        if (it.qty <= 0) continue;
+                        let take = Math.min(it.qty, boxLimit - boxQty);
+                        if (take > 0) {
+                            if (!mainName) mainName = it.name;
+                            boxItems.push(`${it.name}(${it.spec}) - ${take}개`);
+                            boxQty += take;
+                            it.qty -= take;
+                        }
+                        if (boxQty >= boxLimit) break;
+                    }
+
+                    finalUploadData.push({
+                        '운임 구분': order.payType,
+                        '보내는 분 성명': order.senderName,
+                        '보내는 분 전화번호': order.senderPhone,
+                        '보내는 분 주소': order.senderAddr,
+                        '받는 분 성명': order.recName,
+                        '받는 분 전화번호': order.recPhone,
+                        '받는 분 주소': order.recAddr,
+                        '품목명': order.items.length > 1 ? `${mainName} 외` : mainName,
+                        '내품명': boxItems.join('\n'),
+                        '내품수량': boxQty,
+                        '박스수량': 1,
+                        '박스타입': boxQty >= 6 ? 7 : 1,
+                        '배송메세지': order.memo
+                    });
+                }
+            });
+            renderUI();
+        }
+
+        function renderUI() {
+            invoiceList.innerHTML = '';
+            finalUploadData.forEach(inv => {
+                const div = document.createElement('div');
+                div.className = 'bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-4';
+                div.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <span class="text-[10px] font-bold text-slate-400 block uppercase mb-1">보내는 사람: ${inv['보내는 분 성명']} (${inv['보내는 분 전화번호']})</span>
+                            <span class="font-bold text-lg text-slate-800">${inv['받는 분 성명']}</span>
+                        </div>
+                        <span class="px-2 py-1 bg-blue-50 text-blue-600 rounded text-xs font-bold">${inv['운임 구분']}</span>
+                    </div>
+                    <div class="text-sm text-slate-600 white-space-pre bg-slate-50 p-3 rounded-lg">${inv['내품명']}</div>
+                    <div class="mt-3 flex justify-between items-center text-[11px] text-slate-400">
+                        <span>메모: ${inv['배송메세지']}</span>
+                        <span class="font-medium text-slate-500">박스: ${inv['박스타입']}호</span>
+                    </div>
+                `;
+                invoiceList.appendChild(div);
+            });
+            resultArea.classList.remove('hidden');
+        }
+
+        downloadExcelButton.onclick = (e) => {
+            e.preventDefault();
+            if (finalUploadData.length === 0) return alert("데이터가 없습니다.");
+            const exportData = finalUploadData.map(r => ({ ...r, '내품명': r['내품명'].replace(/\n/g, ' / ') }));
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            ws['!cols'] = [{}, {}, {}, {}, {}, {}, {}, { wch: 20 }, { wch: 50 }, { wch: 10 }];
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "CJ_UPLOAD");
+            XLSX.writeFile(wb, `CJ_Invoice_${Date.now()}.xlsx`);
+        };
+    </script>
+</body>
+</html>
